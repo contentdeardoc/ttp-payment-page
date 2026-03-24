@@ -82,13 +82,13 @@
     .field-group { margin-bottom: 16px; }
     .field-label { display: block; font-size: 12px; font-weight: 500; color: var(--text-muted); margin-bottom: 6px; }
 
-    /* Collect.js iframe containers — must have explicit height */
+    /* Collect.js iframe containers */
     #ccnumber, #ccexp, #cvv {
-      height: 46px;
+      height: 48px;
       border: 1.5px solid var(--border);
       border-radius: var(--radius);
       background: var(--surface-soft);
-      transition: border-color 0.2s;
+      transition: border-color 0.2s, background 0.2s;
       position: relative;
       overflow: hidden;
     }
@@ -96,13 +96,15 @@
       border-color: var(--brand);
       background: white;
     }
-    /* Force Collect.js iframes to fill their container */
+    /* Force Collect.js iframes to fill container cleanly */
     #ccnumber iframe, #ccexp iframe, #cvv iframe {
       position: absolute !important;
-      top: 0 !important; left: 0 !important;
+      top: 0 !important;
+      left: 0 !important;
       width: 100% !important;
       height: 100% !important;
       border: none !important;
+      outline: none !important;
     }
 
     .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -260,6 +262,21 @@ function loadCollectJS(publicKey) {
   script.setAttribute('data-field-ccnumber-placeholder', '1234 5678 9012 3456');
   script.setAttribute('data-field-ccexp-placeholder', 'MM / YY');
   script.setAttribute('data-field-cvv-placeholder', 'CVV');
+  // Remove the internal border/outline that NMI renders inside the iframe
+  script.setAttribute('data-custom-css', JSON.stringify({
+    "border": "none",
+    "outline": "none",
+    "box-shadow": "none",
+    "background": "transparent",
+    "font-size": "14px",
+    "font-family": "DM Sans, sans-serif",
+    "color": "#1a1a2e",
+    "height": "48px",
+    "line-height": "48px",
+    "padding": "0 14px"
+  }));
+  script.setAttribute('data-invalid-css', JSON.stringify({"color":"#c0392b","border":"none"}));
+  script.setAttribute('data-placeholder-css', JSON.stringify({"color":"#b0a99a"}));
 
   script.onload = function() {
     // Hide loading message, show fields
