@@ -255,7 +255,6 @@ function loadCollectJS(publicKey) {
   var script = document.createElement('script');
   script.src = 'https://secure.networkmerchants.com/token/Collect.js';
   script.setAttribute('data-tokenization-key', publicKey);
-  script.setAttribute('data-variant', 'inline');
   script.setAttribute('data-field-ccnumber-selector', '#ccnumber');
   script.setAttribute('data-field-ccexp-selector', '#ccexp');
   script.setAttribute('data-field-cvv-selector', '#cvv');
@@ -279,7 +278,18 @@ function loadCollectJS(publicKey) {
   script.setAttribute('data-placeholder-css', JSON.stringify({"color":"#b0a99a"}));
 
   script.onload = function() {
-    // Hide loading message, show fields
+    // Configure callback — must be done via configure() for reliability
+    CollectJS.configure({
+      callback: function(response) {
+        if (response.validationError) {
+          showError(response.validationError);
+          setLoading(false);
+          return;
+        }
+        sendToBackend(response.token);
+      }
+    });
+    // Show fields
     document.getElementById('loading-msg').style.display = 'none';
     document.getElementById('field-ccnumber').style.display = 'block';
     document.getElementById('field-expcvv').style.display = 'grid';
@@ -301,15 +311,7 @@ function submitPayment() {
   CollectJS.startPaymentRequest();
 }
 
-// Collect.js calls this when tokenization is complete
-var CollectJSResponseHandler = function(response) {
-  if (response.validationError) {
-    showError(response.validationError);
-    setLoading(false);
-    return;
-  }
-  sendToBackend(response.token);
-};
+// Callback is set via CollectJS.configure() in the onload handler above
 
 // ---- Backend charge call ----
 function sendToBackend(token) {
