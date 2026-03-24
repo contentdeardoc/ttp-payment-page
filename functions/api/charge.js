@@ -1,132 +1,103 @@
 /**
- * Cloudflare Pages Function
- * File location: /functions/api/charge.js
+ * Cloudflare Pages Function — /functions/api/charge.js
  *
- * This runs server-side (never in the browser).
- * It receives the NMI payment token from the frontend,
- * charges the card via NMI's Transaction API,
- * then fires the GHL webhook to update the contact.
+ * Flow:
+ * 1. Receive payment token + patient info from frontend
+ * 2. Charge card via NMI Transaction API (uses NMI_SECURITY_KEY env var)
+ * 3. On success, POST to GHL webhook to update contact Amount Paid field
+ *    and trigger the "Text-to-Pay - Payment Submitted" workflow
  *
- * ============================================================
- * ENVIRONMENT VARIABLES — set in Cloudflare Pages dashboard
- * under Settings → Environment Variables
- * ============================================================
- *
- * NMI_SECURITY_KEY   : your NMI Security Key (private — never expose)
- * GHL_API_KEY        : GHL API key for the sub-account (optional, for direct field update)
- *
- * The GHL_WEBHOOK_URL is passed from the frontend payload
- * (set per-practice in CONFIG on the HTML page).
- * ============================================================
+ * Environment variable required in Cloudflare Pages Settings:
+ *   NMI_SECURITY_KEY — your private NMI security key
  */
 
 export async function onRequestPost(context) {
   const { request, env } = context;
 
-  // ---- CORS headers (tighten origin in production) ----
-  const corsHeaders = {
+  const cors = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Content-Type': 'application/json'
   };
 
-  // Handle preflight
   if (request.method === 'OPTIONS') {
-    return new Response(null, { status: 204, headers: corsHeaders });
+    return new Response(null, { status: 204, headers: cors });
   }
 
-  // ---- Parse body ----
+  // ---- Parse request ----
   let body;
-  try {
-    body = await request.json();
-  } catch {
-    return jsonResponse({ success: false, error: 'Invalid request body' }, 400, corsHeaders);
-  }
+  try { body = await request.json(); }
+  catch { return respond({ success: false, error: 'Invalid request' }, 400, cors); }
 
   const { token, amount, name, email, phone, ghl_webhook } = body;
 
-  // ---- Validate ----
-  if (!token)  return jsonResponse({ success: false, error: 'Missing payment token' }, 400, corsHeaders);
-  if (!amount || parseFloat(amount) <= 0) {
-    return jsonResponse({ success: false, error: 'Invalid amount' }, 400, corsHeaders);
-  }
+  if (!token)                          return respond({ success: false, error: 'Missing token' }, 400, cors);
+  if (!amount || parseFloat(amount) <= 0) return respond({ success: false, error: 'Invalid amount' }, 400, cors);
 
   const securityKey = env.NMI_SECURITY_KEY;
-  if (!securityKey) {
-    return jsonResponse({ success: false, error: 'Server configuration error' }, 500, corsHeaders);
-  }
+  if (!securityKey) return respond({ success: false, error: 'Server config error: missing NMI key' }, 500, cors);
 
-  // ---- Step 1: Charge card via NMI Transaction API ----
-  let nmiResult;
+  // ---- Step 1: Charge via NMI ----
+  let nmi;
   try {
-    nmiResult = await chargeNMI({ securityKey, token, amount, name, email, phone });
+    nmi = await chargeNMI(securityKey, token, amount, name, email, phone);
   } catch (err) {
-    console.error('NMI API error:', err);
-    return jsonResponse({ success: false, error: 'Payment processor error. Please try again.' }, 502, corsHeaders);
+    console.error('[NMI] Charge error:', err.message);
+    return respond({ success: false, error: 'Payment processor error. Please try again.' }, 502, cors);
   }
 
-  if (!nmiResult.success) {
-    return jsonResponse(
-      { success: false, error: nmiResult.message || 'Payment was declined.' },
-      200, // return 200 so frontend can read the JSON
-      corsHeaders
-    );
+  console.log('[NMI] Result:', nmi.success, nmi.message, nmi.transactionId);
+
+  if (!nmi.success) {
+    return respond({ success: false, error: nmi.message || 'Payment declined.' }, 200, cors);
   }
 
-  // ---- Step 2: Fire GHL webhook ----
-  // This updates the contact's Amount Paid field and triggers the
-  // "Text-to-Pay - Payment Submitted" workflow in GHL.
+  // ---- Step 2: Update GHL contact ----
   if (ghl_webhook) {
     try {
-      await fireGHLWebhook(ghl_webhook, {
-        name,
-        email,
-        phone,
-        amount_paid: amount,
-        transaction_id: nmiResult.transactionId
-      });
+      const ghlResult = await updateGHL(ghl_webhook, { name, email, phone, amount, transactionId: nmi.transactionId });
+      console.log('[GHL] Webhook status:', ghlResult.status);
     } catch (err) {
-      // Log but don't fail — payment already went through
-      console.error('GHL webhook error:', err);
+      // Don't fail the response — payment succeeded, log the GHL error
+      console.error('[GHL] Webhook error:', err.message);
     }
   }
 
-  return jsonResponse({
-    success: true,
-    transactionId: nmiResult.transactionId,
-    amount
-  }, 200, corsHeaders);
+  return respond({ success: true, transactionId: nmi.transactionId, amount }, 200, cors);
 }
 
 // ============================================================
-// Charge card via NMI Transaction API
-// Docs: https://docs.nmi.com/docs/transaction-api
+// NMI Transaction API
+// Uses payment_token from Collect.js
+// Returns { success, transactionId, message }
 // ============================================================
-async function chargeNMI({ securityKey, token, amount, name, email, phone }) {
-  // NMI Transaction API accepts application/x-www-form-urlencoded
+async function chargeNMI(securityKey, token, amount, name, email, phone) {
+  const firstName = (name || '').split(' ')[0] || '';
+  const lastName  = (name || '').split(' ').slice(1).join(' ') || '';
+
   const params = new URLSearchParams({
-    security_key:    securityKey,
-    type:            'sale',
-    amount:          parseFloat(amount).toFixed(2),
-    payment_token:   token,   // token from Collect.js
-    first_name:      (name || '').split(' ')[0] || '',
-    last_name:       (name || '').split(' ').slice(1).join(' ') || '',
-    email:           email || '',
-    phone:           phone || '',
+    security_key:      securityKey,
+    type:              'sale',
+    amount:            parseFloat(amount).toFixed(2),
+    payment_token:     token,
+    first_name:        firstName,
+    last_name:         lastName,
+    email:             email || '',
+    phone:             phone || '',
     order_description: 'Outstanding balance payment',
-    currency:        'USD'
+    currency:          'USD'
   });
 
-  const response = await fetch('https://secure.networkmerchants.com/api/transact.php', {
-    method: 'POST',
+  const res  = await fetch('https://secure.networkmerchants.com/api/transact.php', {
+    method:  'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString()
+    body:    params.toString()
   });
 
-  const text = await response.text();
+  const text   = await res.text();
+  console.log('[NMI] Raw response:', text);
 
-  // NMI returns key=value pairs separated by &
   const result = Object.fromEntries(
     text.split('&').map(pair => {
       const [k, ...v] = pair.split('=');
@@ -134,14 +105,6 @@ async function chargeNMI({ securityKey, token, amount, name, email, phone }) {
     })
   );
 
-  /*
-    NMI response fields:
-    response=1 → approved
-    response=2 → declined
-    response=3 → error
-    responsetext → human-readable message
-    transactionid → NMI transaction ID
-  */
   const approved = result.response === '1';
   return {
     success:       approved,
@@ -151,82 +114,102 @@ async function chargeNMI({ securityKey, token, amount, name, email, phone }) {
 }
 
 // ============================================================
-// Fire GHL webhook
-// This hits the GHL webhook trigger URL with payment data.
-// GHL's "Payment Submitted" workflow listens for Amount Paid
-// field changes — the webhook should update that field.
+// GHL Webhook
 //
-// Option A (used here): POST to the GHL webhook trigger URL
-// directly (the URL you configured in GHL → Automation →
-// Webhook triggers). GHL receives the payload and your
-// workflow maps it to the Amount Paid custom field.
+// Your endpoint: https://externalconnections.getdeardoc.com/contacts/text-to-pay
+// This is a DearDoc custom endpoint that expects specific fields
+// to update the GHL contact's Amount Paid custom field and
+// trigger the "Text-to-Pay - Payment Submitted" workflow.
 //
-// Option B: Use GHL's REST API directly to update the contact
-// field by phone/email lookup, then the workflow fires via the
-// "Contact Changed → Amount Paid → Has changed" trigger.
-// Uncomment the Option B block below if you prefer that.
+// The payload mirrors what the old Pabbly webhook was sending.
+// Field names match the GHL custom field keys used in your workflows.
 // ============================================================
-async function fireGHLWebhook(webhookUrl, data) {
+async function updateGHL(webhookUrl, data) {
+  const now = new Date().toISOString();
+
+  // Paperform-compatible payload — matches what the DearDoc endpoint expects
   const payload = {
-    name:           data.name || '',
-    email:          data.email || '',
-    phone:          data.phone || '',
-    amount_paid:    parseFloat(data.amount_paid).toFixed(2),
-    transaction_id: data.transaction_id || ''
+    data: [
+      {
+        title:      "Name",
+        description: "",
+        type:       "text",
+        key:        "",
+        custom_key: "name",
+        value:      data.name || ""
+      },
+      {
+        title:      "Email",
+        description: "",
+        type:       "email",
+        key:        "",
+        custom_key: "email",
+        value:      data.email || ""
+      },
+      {
+        title:      "Phone",
+        description: "",
+        type:       "phone",
+        key:        "",
+        custom_key: "phone",
+        value:      data.phone || ""
+      },
+      {
+        title:      "Amount Paid",
+        description: "",
+        type:       "number",
+        key:        "",
+        custom_key: "amount_paid",
+        value:      parseFloat(data.amount).toFixed(2)
+      },
+      {
+        title:      "Transaction ID",
+        description: "",
+        type:       "text",
+        key:        "",
+        custom_key: "transaction_id",
+        value:      data.transactionId || ""
+      }
+    ],
+    form_id:      "ttp-nmi-form",
+    slug:         "ttp-contact-form",
+    submission_id: "nmi-" + data.transactionId,
+    created_at:   now,
+    ip_address:   "",
+    team_id:      "",
+    device: {
+      type:         "desktop",
+      device:       "NMI Payment Page",
+      platform:     "Web",
+      browser:      "NMI",
+      embedded:     0,
+      url:          "https://ttp-payment-page.pages.dev",
+      user_agent:   "NMI-Payment-Page/1.0",
+      utm_source:   "",
+      utm_medium:   "",
+      utm_campaign: "",
+      utm_term:     "",
+      utm_content:  "",
+      ip_address:   ""
+    }
   };
 
-  const response = await fetch(webhookUrl, {
-    method: 'POST',
+  console.log('[GHL] Firing webhook:', webhookUrl);
+  console.log('[GHL] Payload:', JSON.stringify(payload));
+
+  const res = await fetch(webhookUrl, {
+    method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body:    JSON.stringify(payload)
   });
 
-  if (!response.ok) {
-    throw new Error('GHL webhook returned ' + response.status);
-  }
+  const responseText = await res.text();
+  console.log('[GHL] Response:', res.status, responseText);
 
-  return response;
+  return { status: res.status, body: responseText };
 }
-
-/*
-// ============================================================
-// OPTION B: Update GHL contact directly via REST API
-// Use this if you want to update the Amount Paid custom field
-// directly without relying on a webhook trigger URL.
-// Requires GHL_API_KEY and GHL_LOCATION_ID env vars.
-// ============================================================
-async function updateGHLContactDirect(env, data) {
-  const apiKey     = env.GHL_API_KEY;
-  const locationId = env.GHL_LOCATION_ID;
-
-  // 1. Search for contact by phone
-  const searchRes = await fetch(
-    `https://rest.gohighlevel.com/v1/contacts/?locationId=${locationId}&phone=${encodeURIComponent(data.phone)}`,
-    { headers: { Authorization: 'Bearer ' + apiKey } }
-  );
-  const searchJson = await searchRes.json();
-  const contact = searchJson.contacts?.[0];
-  if (!contact) throw new Error('Contact not found');
-
-  // 2. Update Amount Paid custom field
-  // Replace AMOUNT_PAID_FIELD_KEY with your actual GHL custom field key
-  await fetch(`https://rest.gohighlevel.com/v1/contacts/${contact.id}`, {
-    method: 'PUT',
-    headers: {
-      Authorization: 'Bearer ' + apiKey,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      customField: {
-        AMOUNT_PAID_FIELD_KEY: data.amount_paid
-      }
-    })
-  });
-}
-*/
 
 // ---- Helper ----
-function jsonResponse(data, status, headers) {
+function respond(data, status, headers) {
   return new Response(JSON.stringify(data), { status, headers });
 }
-
