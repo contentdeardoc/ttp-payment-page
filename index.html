@@ -94,12 +94,22 @@
 </div>
 
 <script>
-// ---- Config ----
-var PRACTICE_NAME   = "DearDoc Testing";
-var GHL_WEBHOOK_URL = "https://externalconnections.getdeardoc.com/contacts/text-to-pay?apiKey=8f1af0ecc04ff737f5c44c8c8393a01a501443b9a1cfb2b45e2cf756f213c15dce521f4d44e47046b6f6d6390ccd79c403d94aadb7377ed67bb84935d4be7689&locationId=AWAx9wVFqYR5TQqhTfft";
-var NMI_KEY         = "bHgpz3-3ek8bY-x2qT7k-Ga39Du";
+/*
+  ============================================================
+  Only safe/public values live here.
+  NMI_SECURITY_KEY, GHL_WEBHOOK_URL, and API_SECRET
+  are stored as Cloudflare environment variables — never here.
+  ============================================================
+*/
+var PRACTICE_NAME = "DearDoc Testing";
+var NMI_PUBLIC_KEY = "bHgpz3-3ek8bY-x2qT7k-Ga39Du"; // public key — safe to expose
 
-// ---- URL params ----
+// API_SECRET must match the API_SECRET env var in Cloudflare
+// This prevents unauthorized calls to /api/charge
+// Generate your own: https://www.uuidgenerator.net/
+var API_SECRET = "PASTE_YOUR_API_SECRET_HERE";
+
+// ---- URL params from GHL trigger link ----
 var p            = new URLSearchParams(location.search);
 var AMT          = parseFloat(p.get('m') || p.get('amount') || '0') || 0;
 var NAME         = p.get('name')         || '';
@@ -109,7 +119,7 @@ var CONTACT_ID   = p.get('contact_id')   || p.get('id') || '';
 var TRIGGER_LINK = p.get('trigger_link') || '';
 var SESSION_ID   = p.get('sessionId')    || '';
 
-// ---- UI init ----
+// ---- UI ----
 document.getElementById('pname').textContent = PRACTICE_NAME;
 document.title = PRACTICE_NAME + ' — Secure Payment';
 var f = AMT.toFixed(2).split('.');
@@ -119,14 +129,11 @@ document.getElementById('btntxt').textContent = 'Pay $' + AMT.toFixed(2);
 document.getElementById('okamt').textContent = '$' + AMT.toFixed(2);
 if (NAME) document.getElementById('greet').innerHTML = 'Hello, <strong>' + NAME.replace(/</g,'&lt;') + '</strong>';
 
-// ---- Load Collect.js then configure with callback ----
-// We do NOT use data-callback attribute — instead we call
-// CollectJS.configure() immediately in the onload handler.
-// This is the only reliable cross-browser approach.
+// ---- Load Collect.js ----
 (function() {
   var s = document.createElement('script');
   s.src = 'https://secure.networkmerchants.com/token/Collect.js';
-  s.setAttribute('data-tokenization-key', NMI_KEY);
+  s.setAttribute('data-tokenization-key', NMI_PUBLIC_KEY);
   s.setAttribute('data-variant', 'inline');
   s.setAttribute('data-field-ccnumber-selector', '#ccnumber');
   s.setAttribute('data-field-ccexp-selector', '#ccexp');
@@ -142,11 +149,7 @@ if (NAME) document.getElementById('greet').innerHTML = 'Hello, <strong>' + NAME.
       variant: 'inline',
       styleSniffer: false,
       callback: function(response) {
-        if (response.validationError) {
-          showErr(response.validationError);
-          loading(false);
-          return;
-        }
+        if (response.validationError) { showErr(response.validationError); loading(false); return; }
         charge(response.token);
       }
     });
@@ -165,13 +168,26 @@ function pay() {
 function charge(token) {
   fetch('/api/charge', {
     method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({token:token, amount:AMT.toFixed(2), name:NAME, email:EMAIL, phone:PHONE, contact_id:CONTACT_ID, trigger_link:TRIGGER_LINK, session_id:SESSION_ID, ghl_webhook:GHL_WEBHOOK_URL})
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Secret': API_SECRET   // validates request on server side
+    },
+    body: JSON.stringify({
+      token:        token,
+      amount:       AMT.toFixed(2),
+      name:         NAME,
+      email:        EMAIL,
+      phone:        PHONE,
+      contact_id:   CONTACT_ID,
+      trigger_link: TRIGGER_LINK,
+      session_id:   SESSION_ID
+      // ghl_webhook removed — now stored securely in Cloudflare env vars
+    })
   })
-  .then(function(r){return r.json();})
+  .then(function(r){ return r.json(); })
   .then(function(d){
     if (d.success) {
-      document.getElementById('form').style.display='none';
+      document.getElementById('form').style.display = 'none';
       document.getElementById('okscreen').classList.add('show');
     } else {
       showErr(d.error || 'Payment declined. Please try a different card.');
@@ -182,8 +198,8 @@ function charge(token) {
 }
 
 function loading(on) { var b=document.getElementById('paybtn'); b.classList.toggle('loading',on); b.disabled=on; }
-function showErr(m) { var e=document.getElementById('errmsg'); e.textContent=m; e.classList.add('show'); }
-function clearErr() { document.getElementById('errmsg').classList.remove('show'); }
+function showErr(m)   { var e=document.getElementById('errmsg'); e.textContent=m; e.classList.add('show'); }
+function clearErr()   { document.getElementById('errmsg').classList.remove('show'); }
 </script>
 </body>
 </html>
