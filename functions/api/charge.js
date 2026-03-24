@@ -30,7 +30,7 @@ export async function onRequestPost(context) {
   try { body = await request.json(); }
   catch { return respond({ success: false, error: 'Invalid request' }, 400, cors); }
 
-  const { token, amount, name, email, phone, ghl_webhook } = body;
+  const { token, amount, name, email, phone, contact_id, ghl_webhook } = body;
 
   if (!token)                          return respond({ success: false, error: 'Missing token' }, 400, cors);
   if (!amount || parseFloat(amount) <= 0) return respond({ success: false, error: 'Invalid amount' }, 400, cors);
@@ -56,7 +56,7 @@ export async function onRequestPost(context) {
   // ---- Step 2: Update GHL contact ----
   if (ghl_webhook) {
     try {
-      const ghlResult = await updateGHL(ghl_webhook, { name, email, phone, amount, transactionId: nmi.transactionId });
+      const ghlResult = await updateGHL(ghl_webhook, { name, email, phone, contact_id, amount, transactionId: nmi.transactionId });
       console.log('[GHL] Webhook status:', ghlResult.status);
     } catch (err) {
       // Don't fail the response — payment succeeded, log the GHL error
@@ -127,8 +127,24 @@ async function chargeNMI(securityKey, token, amount, name, email, phone) {
 async function updateGHL(webhookUrl, data) {
   const now = new Date().toISOString();
 
+  // Extract locationId from webhook URL to include in payload
+  let locationId = '';
+  try {
+    const urlObj = new URL(webhookUrl);
+    locationId = urlObj.searchParams.get('locationId') || '';
+  } catch(e) {}
+
+  // Normalize phone — ensure it has + prefix if it's 11 digits
+  const rawPhone = data.phone || '';
+  const phone = rawPhone.startsWith('+') ? rawPhone :
+                rawPhone.replace(/\D/g,'').length === 11 ? '+' + rawPhone.replace(/\D/g,'') :
+                rawPhone.replace(/\D/g,'').length === 10 ? '+1' + rawPhone.replace(/\D/g,'') :
+                rawPhone;
+
   // Paperform-compatible payload — matches what the DearDoc endpoint expects
   const payload = {
+    location_id: locationId,
+    contact_id:  data.contact_id || '',
     data: [
       {
         title:      "Name",
@@ -152,7 +168,7 @@ async function updateGHL(webhookUrl, data) {
         type:       "phone",
         key:        "",
         custom_key: "phone",
-        value:      data.phone || ""
+        value:      phone
       },
       {
         title:      "Amount Paid",
@@ -169,6 +185,14 @@ async function updateGHL(webhookUrl, data) {
         key:        "",
         custom_key: "transaction_id",
         value:      data.transactionId || ""
+      },
+      {
+        title:      "Contact ID",
+        description: "",
+        type:       "text",
+        key:        "",
+        custom_key: "contact_id",
+        value:      data.contact_id || ""
       }
     ],
     form_id:      "ttp-nmi-form",
