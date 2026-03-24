@@ -538,31 +538,9 @@
 </div><!-- .page-wrap -->
 
 <!--
-  ============================================================
-  NMI Collect.js — loaded with your public key
-  The data-tokenization-key is SAFE to expose in the browser.
-  It cannot be used to charge cards — only to tokenize.
-  ============================================================
+  NMI Collect.js is loaded dynamically below after CONFIG is ready.
+  The public key is injected at load time so the iframes initialize correctly.
 -->
-<script id="collectjs-script"
-  src="https://secure.networkmerchants.com/token/Collect.js"
-  data-tokenization-key=""
-  data-field-ccnumber-placeholder="1234 5678 9012 3456"
-  data-field-ccexp-placeholder="MM / YY"
-  data-field-cvv-placeholder="CVV"
-  data-google-font="DM+Sans"
-  data-custom-css='{
-    "font-size":"14px",
-    "font-family":"DM Sans, sans-serif",
-    "color":"#1a1a2e",
-    "background":"transparent",
-    "border":"none",
-    "height":"44px",
-    "line-height":"44px"
-  }'
-  data-invalid-css='{"color":"#c0392b"}'
-  data-placeholder-css='{"color":"#b0a99a"}'
-></script>
 
 <script>
 // ============================================================
@@ -582,9 +560,28 @@
     logoEl.classList.remove('hidden');
   }
 
-  // Inject NMI public key into Collect.js script tag
-  document.getElementById('collectjs-script')
-    .setAttribute('data-tokenization-key', cfg.NMI_PUBLIC_KEY);
+  // Load Collect.js dynamically with the public key already set as an attribute.
+  // This must happen BEFORE the script loads — Collect.js reads data-tokenization-key
+  // at parse time, so we cannot set it after the fact.
+  var cjs = document.createElement('script');
+  cjs.id = 'collectjs-script';
+  cjs.src = 'https://secure.networkmerchants.com/token/Collect.js';
+  cjs.setAttribute('data-tokenization-key', cfg.NMI_PUBLIC_KEY);
+  cjs.setAttribute('data-field-ccnumber-placeholder', '1234 5678 9012 3456');
+  cjs.setAttribute('data-field-ccexp-placeholder', 'MM / YY');
+  cjs.setAttribute('data-field-cvv-placeholder', 'CVV');
+  cjs.setAttribute('data-custom-css', JSON.stringify({
+    'font-size': '14px',
+    'font-family': 'DM Sans, sans-serif',
+    'color': '#1a1a2e',
+    'background': 'transparent',
+    'border': 'none',
+    'height': '44px',
+    'line-height': '44px'
+  }));
+  cjs.setAttribute('data-invalid-css', JSON.stringify({'color':'#c0392b'}));
+  cjs.setAttribute('data-placeholder-css', JSON.stringify({'color':'#b0a99a'}));
+  document.body.appendChild(cjs);
 
   // Parse amount
   const rawAmount = parseFloat(params.get('m') || params.get('amount') || '0');
