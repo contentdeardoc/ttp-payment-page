@@ -1,14 +1,11 @@
 /**
  * Cloudflare Pages Function — /functions/api/charge.js
  *
- * Flow:
- * 1. Receive payment token + patient info from frontend
- * 2. Charge card via NMI Transaction API (uses NMI_SECURITY_KEY env var)
- * 3. On success, POST to GHL webhook to update contact Amount Paid field
- *    and trigger the "Text-to-Pay - Payment Submitted" workflow
+ * 1. Charge card via NMI
+ * 2. Update GHL contact via DearDoc endpoint
  *
- * Environment variable required in Cloudflare Pages Settings:
- *   NMI_SECURITY_KEY — your private NMI security key
+ * Environment variable required:
+ *   NMI_SECURITY_KEY — private NMI security key (set in Cloudflare Pages Settings)
  */
 
 export async function onRequestPost(context) {
@@ -25,25 +22,24 @@ export async function onRequestPost(context) {
     return new Response(null, { status: 204, headers: cors });
   }
 
-  // ---- Parse request ----
   let body;
   try { body = await request.json(); }
   catch { return respond({ success: false, error: 'Invalid request' }, 400, cors); }
 
   const { token, amount, name, email, phone, contact_id, trigger_link, session_id, ghl_webhook } = body;
 
-  if (!token)                          return respond({ success: false, error: 'Missing token' }, 400, cors);
+  if (!token) return respond({ success: false, error: 'Missing token' }, 400, cors);
   if (!amount || parseFloat(amount) <= 0) return respond({ success: false, error: 'Invalid amount' }, 400, cors);
 
   const securityKey = env.NMI_SECURITY_KEY;
-  if (!securityKey) return respond({ success: false, error: 'Server config error: missing NMI key' }, 500, cors);
+  if (!securityKey) return respond({ success: false, error: 'Missing NMI key' }, 500, cors);
 
   // ---- Step 1: Charge via NMI ----
   let nmi;
   try {
     nmi = await chargeNMI(securityKey, token, amount, name, email, phone);
   } catch (err) {
-    console.error('[NMI] Charge error:', err.message);
+    console.error('[NMI] Error:', err.message);
     return respond({ success: false, error: 'Payment processor error. Please try again.' }, 502, cors);
   }
 
@@ -53,14 +49,17 @@ export async function onRequestPost(context) {
     return respond({ success: false, error: nmi.message || 'Payment declined.' }, 200, cors);
   }
 
-  // ---- Step 2: Update GHL contact ----
+  // ---- Step 2: Update GHL via DearDoc endpoint ----
   if (ghl_webhook) {
     try {
-      const ghlResult = await updateGHL(ghl_webhook, { name, email, phone, contact_id, trigger_link, session_id, amount, transactionId: nmi.transactionId });
-      console.log('[GHL] Webhook status:', ghlResult.status);
+      await updateGHL(ghl_webhook, {
+        name, email, phone,
+        amount, contact_id,
+        trigger_link, session_id,
+        transactionId: nmi.transactionId
+      });
     } catch (err) {
-      // Don't fail the response — payment succeeded, log the GHL error
-      console.error('[GHL] Webhook error:', err.message);
+      console.error('[GHL] Error:', err.message);
     }
   }
 
@@ -69,8 +68,6 @@ export async function onRequestPost(context) {
 
 // ============================================================
 // NMI Transaction API
-// Uses payment_token from Collect.js
-// Returns { success, transactionId, message }
 // ============================================================
 async function chargeNMI(securityKey, token, amount, name, email, phone) {
   const firstName = (name || '').split(' ')[0] || '';
@@ -114,136 +111,39 @@ async function chargeNMI(securityKey, token, amount, name, email, phone) {
 }
 
 // ============================================================
-// GHL Webhook
+// GHL Update via DearDoc endpoint
 //
-// Your endpoint: https://externalconnections.getdeardoc.com/contacts/text-to-pay
-// This is a DearDoc custom endpoint that expects specific fields
-// to update the GHL contact's Amount Paid custom field and
-// trigger the "Text-to-Pay - Payment Submitted" workflow.
+// The original Pabbly integration passed data as URL query params:
+//   webhookUrl?name=X&email=Y&amount_paid=Z&phone=W
 //
-// The payload mirrors what the old Pabbly webhook was sending.
-// Field names match the GHL custom field keys used in your workflows.
+// We replicate that exactly here.
 // ============================================================
 async function updateGHL(webhookUrl, data) {
-  const now = new Date().toISOString();
+  const amountPaid = parseFloat(data.amount).toFixed(2);
 
-  // Extract locationId from webhook URL to include in payload
-  let locationId = '';
-  try {
-    const urlObj = new URL(webhookUrl);
-    locationId = urlObj.searchParams.get('locationId') || '';
-  } catch(e) {}
+  // Build URL with query params — matching original Pabbly format
+  const url = new URL(webhookUrl);
+  url.searchParams.set('name',          data.name          || '');
+  url.searchParams.set('email',         data.email         || '');
+  url.searchParams.set('phone',         data.phone         || '');
+  url.searchParams.set('amount_paid',   amountPaid);
+  url.searchParams.set('contact_id',    data.contact_id    || '');
+  url.searchParams.set('trigger_link',  data.trigger_link  || '');
 
-  // Normalize phone — ensure it has + prefix if it's 11 digits
-  const rawPhone = data.phone || '';
-  const phone = rawPhone.startsWith('+') ? rawPhone :
-                rawPhone.replace(/\D/g,'').length === 11 ? '+' + rawPhone.replace(/\D/g,'') :
-                rawPhone.replace(/\D/g,'').length === 10 ? '+1' + rawPhone.replace(/\D/g,'') :
-                rawPhone;
+  console.log('[GHL] POST to:', url.toString());
 
-  // Paperform-compatible payload — matches what the DearDoc endpoint expects
-  const payload = {
-    location_id: locationId,
-    contact_id:   data.contact_id   || '',
-    trigger_link: data.trigger_link || '',
-    session_id:   data.session_id   || '',
-    data: [
-      {
-        title:      "Name",
-        description: "",
-        type:       "text",
-        key:        "",
-        custom_key: "name",
-        value:      data.name || ""
-      },
-      {
-        title:      "Email",
-        description: "",
-        type:       "email",
-        key:        "",
-        custom_key: "email",
-        value:      data.email || ""
-      },
-      {
-        title:      "Phone",
-        description: "",
-        type:       "phone",
-        key:        "",
-        custom_key: "phone",
-        value:      phone
-      },
-      {
-        title:      "Amount Paid",
-        description: "",
-        type:       "number",
-        key:        "",
-        custom_key: "amount_paid",
-        value:      parseFloat(data.amount).toFixed(2)
-      },
-      {
-        title:      "Transaction ID",
-        description: "",
-        type:       "text",
-        key:        "",
-        custom_key: "transaction_id",
-        value:      data.transactionId || ""
-      },
-      {
-        title:      "Contact ID",
-        description: "",
-        type:       "text",
-        key:        "",
-        custom_key: "contact_id",
-        value:      data.contact_id || ""
-      },
-      {
-        title:      "Trigger Link",
-        description: "",
-        type:       "text",
-        key:        "",
-        custom_key: "trigger_link",
-        value:      data.trigger_link || ""
-      }
-    ],
-    form_id:      "ttp-nmi-form",
-    slug:         "ttp-contact-form",
-    submission_id: data.session_id || ("nmi-" + data.transactionId),
-    created_at:   now,
-    ip_address:   "",
-    team_id:      "",
-    device: {
-      type:         "desktop",
-      device:       "NMI Payment Page",
-      platform:     "Web",
-      browser:      "NMI",
-      embedded:     0,
-      url:          "https://ttp-payment-page.pages.dev",
-      user_agent:   "NMI-Payment-Page/1.0",
-      utm_source:   "",
-      utm_medium:   "",
-      utm_campaign: "",
-      utm_term:     "",
-      utm_content:  "",
-      ip_address:   ""
-    }
-  };
-
-  console.log('[GHL] Firing webhook:', webhookUrl);
-  console.log('[GHL] Payload:', JSON.stringify(payload));
-
-  const res = await fetch(webhookUrl, {
+  const res = await fetch(url.toString(), {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(payload)
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    ''
   });
 
-  const responseText = await res.text();
-  console.log('[GHL] Response:', res.status, responseText);
+  const text = await res.text();
+  console.log('[GHL] Response:', res.status, text);
 
-  return { status: res.status, body: responseText };
+  return { status: res.status, body: text };
 }
 
-// ---- Helper ----
 function respond(data, status, headers) {
   return new Response(JSON.stringify(data), { status, headers });
 }
