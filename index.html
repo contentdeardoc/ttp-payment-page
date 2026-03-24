@@ -100,12 +100,14 @@ var GHL_WEBHOOK_URL = "https://externalconnections.getdeardoc.com/contacts/text-
 var NMI_KEY         = "bHgpz3-3ek8bY-x2qT7k-Ga39Du";
 
 // ---- URL params ----
-var p          = new URLSearchParams(location.search);
-var AMT        = parseFloat(p.get('m') || p.get('amount') || '0') || 0;
-var NAME       = p.get('name')       || '';
-var EMAIL      = p.get('email')      || '';
-var PHONE      = p.get('phone')      || '';
-var CONTACT_ID = p.get('contact_id') || p.get('id') || '';
+var p            = new URLSearchParams(location.search);
+var AMT          = parseFloat(p.get('m') || p.get('amount') || '0') || 0;
+var NAME         = p.get('name')         || '';
+var EMAIL        = p.get('email')        || '';
+var PHONE        = p.get('phone')        || '';
+var CONTACT_ID   = p.get('contact_id')   || p.get('id') || '';
+var TRIGGER_LINK = p.get('trigger_link') || '';
+var SESSION_ID   = p.get('sessionId')    || '';
 
 // ---- UI init ----
 document.getElementById('pname').textContent = PRACTICE_NAME;
@@ -164,7 +166,7 @@ function charge(token) {
   fetch('/api/charge', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({token:token, amount:AMT.toFixed(2), name:NAME, email:EMAIL, phone:PHONE, contact_id:CONTACT_ID, ghl_webhook:GHL_WEBHOOK_URL})
+    body: JSON.stringify({token:token, amount:AMT.toFixed(2), name:NAME, email:EMAIL, phone:PHONE, contact_id:CONTACT_ID, trigger_link:TRIGGER_LINK, session_id:SESSION_ID, ghl_webhook:GHL_WEBHOOK_URL})
   })
   .then(function(r){return r.json();})
   .then(function(d){
