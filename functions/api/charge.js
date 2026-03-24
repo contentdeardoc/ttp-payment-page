@@ -30,7 +30,7 @@ export async function onRequestPost(context) {
   try { body = await request.json(); }
   catch { return respond({ success: false, error: 'Invalid request' }, 400, cors); }
 
-  const { token, amount, name, email, phone, contact_id, ghl_webhook } = body;
+  const { token, amount, name, email, phone, contact_id, trigger_link, session_id, ghl_webhook } = body;
 
   if (!token)                          return respond({ success: false, error: 'Missing token' }, 400, cors);
   if (!amount || parseFloat(amount) <= 0) return respond({ success: false, error: 'Invalid amount' }, 400, cors);
@@ -56,7 +56,7 @@ export async function onRequestPost(context) {
   // ---- Step 2: Update GHL contact ----
   if (ghl_webhook) {
     try {
-      const ghlResult = await updateGHL(ghl_webhook, { name, email, phone, contact_id, amount, transactionId: nmi.transactionId });
+      const ghlResult = await updateGHL(ghl_webhook, { name, email, phone, contact_id, trigger_link, session_id, amount, transactionId: nmi.transactionId });
       console.log('[GHL] Webhook status:', ghlResult.status);
     } catch (err) {
       // Don't fail the response — payment succeeded, log the GHL error
@@ -144,7 +144,9 @@ async function updateGHL(webhookUrl, data) {
   // Paperform-compatible payload — matches what the DearDoc endpoint expects
   const payload = {
     location_id: locationId,
-    contact_id:  data.contact_id || '',
+    contact_id:   data.contact_id   || '',
+    trigger_link: data.trigger_link || '',
+    session_id:   data.session_id   || '',
     data: [
       {
         title:      "Name",
@@ -193,11 +195,19 @@ async function updateGHL(webhookUrl, data) {
         key:        "",
         custom_key: "contact_id",
         value:      data.contact_id || ""
+      },
+      {
+        title:      "Trigger Link",
+        description: "",
+        type:       "text",
+        key:        "",
+        custom_key: "trigger_link",
+        value:      data.trigger_link || ""
       }
     ],
     form_id:      "ttp-nmi-form",
     slug:         "ttp-contact-form",
-    submission_id: "nmi-" + data.transactionId,
+    submission_id: data.session_id || ("nmi-" + data.transactionId),
     created_at:   now,
     ip_address:   "",
     team_id:      "",
