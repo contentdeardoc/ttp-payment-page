@@ -155,13 +155,26 @@
   This key is safe to expose — it can only tokenize, not charge.
   ========================================================
 -->
+
+<!-- Define callback BEFORE Collect.js loads so it can find it -->
+<script>
+window.nmiCallback = function(response) {
+  if (response.validationError) {
+    showError(response.validationError);
+    setLoading(false);
+    return;
+  }
+  sendToBackend(response.token);
+};
+</script>
+
 <script
   src="https://secure.networkmerchants.com/token/Collect.js"
   data-tokenization-key="bHgpz3-3ek8bY-x2qT7k-Ga39Du"
   data-variant="inline"
-  data-field-ccnumber-selector="#ccnumber" 
-  data-field-ccexp-selector="#ccexp"
-  ddata-field-cvv-selector="#cvv" 
+  data-fields-ccnumber-selector="#ccnumber"
+  data-fields-ccexp-selector="#ccexp"
+  data-fields-cvv-selector="#cvv"
   data-field-ccnumber-placeholder="1234 5678 9012 3456"
   data-field-ccexp-placeholder="MM / YY"
   data-field-cvv-placeholder="CVV"
@@ -218,15 +231,7 @@ if (_name) {
     'Hello, <strong>' + _name.replace(/</g,'&lt;') + '</strong>';
 }
 
-// NMI callback — called automatically after tokenization
-window.nmiCallback = function(response) {
-  if (response.validationError) {
-    showError(response.validationError);
-    setLoading(false);
-    return;
-  }
-  sendToBackend(response.token);
-};
+// nmiCallback is defined above, before Collect.js loads
 
 function submitPayment() {
   if (_amount <= 0) { showError('Invalid amount. Please contact the office.'); return; }
