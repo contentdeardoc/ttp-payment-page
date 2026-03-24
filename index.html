@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secure Payment</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+
+  <!--
+    ============================================================
+    CONFIGURATION — edit these per practice deployment
+    ============================================================
+    NMI_PUBLIC_KEY   : from NMI dashboard (safe for frontend)
+    PRACTICE_NAME    : displayed on the page
+    PRACTICE_LOGO    : URL to practice logo image (or "" to hide)
+    BACKEND_URL      : URL of your Cloudflare Function / server
+    GHL_WEBHOOK_URL  : your GHL webhook trigger URL
+    PRIMARY_COLOR    : brand accent color
+    ============================================================
+  -->
+  <script>
+    window.CONFIG = {
+      NMI_PUBLIC_KEY:   "YOUR_NMI_PUBLIC_KEY_HERE",
+      PRACTICE_NAME:    "DearDoc Practice",
+      PRACTICE_LOGO:    "",
+      BACKEND_URL:      "/api/charge",
+      GHL_WEBHOOK_URL:  "https://YOUR_GHL_WEBHOOK_URL_HERE",
+      PRIMARY_COLOR:    "#1a1a2e"
+    };
+  </script>
+
+  <style>
+    :root {
+      --brand:        #1a1a2e;
+      --brand-mid:    #16213e;
+      --accent:       #e8c97e;
+      --accent-dark:  #c9a84c;
+      --surface:      #ffffff;
+      --surface-soft: #f8f7f4;
+      --border:       #e8e4db;
+      --text-primary: #1a1a2e;
+      --text-muted:   #7a7568;
+      --text-light:   #b0a99a;
+      --success:      #2d7a4f;
+      --error:        #c0392b;
+      --radius:       12px;
+      --shadow:       0 4px 32px rgba(26,26,46,0.10);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--surface-soft);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+
+    /* Background texture */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 60% 40% at 20% 20%, rgba(232,201,126,0.08) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 50% at 80% 80%, rgba(26,26,46,0.05) 0%, transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .page-wrap {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 480px;
+    }
+
+    /* ---- HEADER ---- */
+    .header {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    .practice-logo {
+      height: 52px;
+      object-fit: contain;
+      margin-bottom: 14px;
+    }
+
+    .practice-logo.hidden { display: none; }
+
+    .practice-name {
+      font-family: 'DM Serif Display', serif;
+      font-size: 22px;
+      color: var(--brand);
+      letter-spacing: -0.3px;
+    }
+
+    .secure-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-top: 6px;
+    }
+
+    .secure-badge svg { opacity: 0.6; }
+
+    /* ---- CARD ---- */
+    .card {
+      background: var(--surface);
+      border-radius: 20px;
+      box-shadow: var(--shadow), 0 1px 0 rgba(255,255,255,0.8) inset;
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    /* Amount banner */
+    .amount-banner {
+      background: var(--brand);
+      padding: 28px 32px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .amount-banner::after {
+      content: '';
+      position: absolute;
+      bottom: -1px;
+      left: 0; right: 0;
+      height: 8px;
+      background: var(--surface);
+      border-radius: 8px 8px 0 0;
+    }
+
+    .amount-banner::before {
+      content: '';
+      position: absolute;
+      top: -40px; right: -40px;
+      width: 120px; height: 120px;
+      border-radius: 50%;
+      background: rgba(232,201,126,0.08);
+    }
+
+    .amount-label {
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.55);
+      margin-bottom: 6px;
+    }
+
+    .amount-value {
+      font-family: 'DM Serif Display', serif;
+      font-size: 48px;
+      color: var(--accent);
+      line-height: 1;
+      letter-spacing: -1px;
+    }
+
+    .amount-value .cents {
+      font-size: 26px;
+      vertical-align: super;
+      margin-left: 2px;
+    }
+
+    .patient-greeting {
+      margin-top: 10px;
+      font-size: 13px;
+      color: rgba(255,255,255,0.6);
+    }
+
+    .patient-greeting strong {
+      color: rgba(255,255,255,0.9);
+      font-weight: 500;
+    }
+
+    /* Form body */
+    .form-body {
+      padding: 28px 32px 32px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-light);
+      margin-bottom: 14px;
+    }
+
+    .field-group {
+      margin-bottom: 16px;
+    }
+
+    .field-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      letter-spacing: 0.02em;
+    }
+
+    /* NMI Collect.js injects iframes into these divs */
+    #ccnumber,
+    #ccexp,
+    #cvv {
+      height: 46px;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0 14px;
+      transition: border-color 0.2s;
+      background: var(--surface-soft);
+      display: flex;
+      align-items: center;
+    }
+
+    #ccnumber:focus-within,
+    #ccexp:focus-within,
+    #cvv:focus-within {
+      border-color: var(--brand);
+      background: white;
+    }
+
+    /* Collect.js injects an iframe — make it fill the container */
+    #ccnumber iframe,
+    #ccexp iframe,
+    #cvv iframe {
+      width: 100% !important;
+      height: 100% !important;
+      border: none !important;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    /* Card icons */
+    .card-icons {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 18px;
+    }
+
+    .card-icons svg {
+      height: 22px;
+      opacity: 0.45;
+      transition: opacity 0.2s;
+    }
+
+    .card-icons svg.active { opacity: 1; }
+
+    /* Pay button */
+    .pay-btn {
+      width: 100%;
+      height: 54px;
+      background: var(--brand);
+      color: white;
+      border: none;
+      border-radius: var(--radius);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      margin-top: 20px;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+
+    .pay-btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 24px rgba(26,26,46,0.25);
+    }
+
+    .pay-btn:active:not(:disabled) { transform: translateY(0); }
+
+    .pay-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .pay-btn .btn-text { position: relative; z-index: 1; }
+
+    /* Spinner */
+    .pay-btn .spinner {
+      display: none;
+      width: 20px; height: 20px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%,-50%);
+    }
+
+    .pay-btn.loading .btn-text { opacity: 0; }
+    .pay-btn.loading .spinner { display: block; }
+
+    @keyframes spin { to { transform: translate(-50%,-50%) rotate(360deg); } }
+
+    /* Accent bar on button */
+    .pay-btn::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 3px;
+      background: var(--accent);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.3s;
+    }
+    .pay-btn:hover:not(:disabled)::after { transform: scaleX(1); }
+
+    /* Messages */
+    .message {
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      margin-top: 14px;
+      display: none;
+      align-items: flex-start;
+      gap: 10px;
+      line-height: 1.5;
+    }
+
+    .message.show { display: flex; }
+
+    .message.error {
+      background: #fdf2f2;
+      border: 1px solid #f5c6c6;
+      color: var(--error);
+    }
+
+    .message.success {
+      background: #f0faf5;
+      border: 1px solid #a8d5bc;
+      color: var(--success);
+    }
+
+    /* Footer */
+    .form-footer {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 11px;
+      color: var(--text-light);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    /* ---- SUCCESS SCREEN ---- */
+    .success-screen {
+      display: none;
+      text-align: center;
+      padding: 48px 32px;
+    }
+
+    .success-screen.show { display: block; }
+
+    .success-icon {
+      width: 72px; height: 72px;
+      background: #f0faf5;
+      border: 2px solid #a8d5bc;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+
+    .success-title {
+      font-family: 'DM Serif Display', serif;
+      font-size: 26px;
+      color: var(--brand);
+      margin-bottom: 10px;
+    }
+
+    .success-msg {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .success-amount {
+      display: inline-block;
+      margin-top: 20px;
+      padding: 10px 24px;
+      background: var(--surface-soft);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .success-amount strong { color: var(--brand); }
+
+    /* Responsive */
+    @media (max-width: 520px) {
+      .form-body { padding: 22px 20px 24px; }
+      .amount-banner { padding: 24px 20px; }
+      .amount-value { font-size: 38px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="page-wrap">
+
+  <!-- HEADER -->
+  <div class="header">
+    <img id="practice-logo" class="practice-logo hidden" alt="Practice Logo" src="">
+    <div class="practice-name" id="practice-name">Secure Payment</div>
+    <div class="secure-badge">
+      <svg width="11" height="13" viewBox="0 0 11 13" fill="none">
+        <path d="M5.5 0L0 2.16667V6.5C0 9.625 2.42 12.5583 5.5 13C8.58 12.5583 11 9.625 11 6.5V2.16667L5.5 0Z" fill="currentColor"/>
+      </svg>
+      256-bit encrypted &amp; secure
+    </div>
+  </div>
+
+  <!-- CARD -->
+  <div class="card">
+
+    <!-- Amount banner -->
+    <div class="amount-banner">
+      <div class="amount-label">Outstanding balance</div>
+      <div class="amount-value" id="display-amount">$<span id="dollars">0</span><span class="cents" id="cents">.00</span></div>
+      <div class="patient-greeting" id="patient-greeting"></div>
+    </div>
+
+    <!-- Payment form -->
+    <div class="form-body" id="form-section">
+
+      <div class="section-label">Card information</div>
+
+      <!-- Card brand icons -->
+      <div class="card-icons">
+        <!-- Visa -->
+        <svg id="icon-visa" viewBox="0 0 38 24" xmlns="http://www.w3.org/2000/svg">
+          <rect width="38" height="24" rx="4" fill="#1A1F71"/>
+          <text x="5" y="17" font-family="Arial" font-size="11" font-weight="bold" fill="white">VISA</text>
+        </svg>
+        <!-- MC -->
+        <svg id="icon-mc" viewBox="0 0 38 24" xmlns="http://www.w3.org/2000/svg">
+          <rect width="38" height="24" rx="4" fill="#252525"/>
+          <circle cx="15" cy="12" r="7" fill="#EB001B"/>
+          <circle cx="23" cy="12" r="7" fill="#F79E1B"/>
+          <path d="M19 7.33A7 7 0 0121.66 12 7 7 0 0119 16.67 7 7 0 0116.34 12 7 7 0 0119 7.33z" fill="#FF5F00"/>
+        </svg>
+        <!-- Amex -->
+        <svg id="icon-amex" viewBox="0 0 38 24" xmlns="http://www.w3.org/2000/svg">
+          <rect width="38" height="24" rx="4" fill="#2557D6"/>
+          <text x="4" y="17" font-family="Arial" font-size="9" font-weight="bold" fill="white">AMEX</text>
+        </svg>
+        <!-- Discover -->
+        <svg id="icon-disc" viewBox="0 0 38 24" xmlns="http://www.w3.org/2000/svg">
+          <rect width="38" height="24" rx="4" fill="#F76F20"/>
+          <text x="3" y="17" font-family="Arial" font-size="7.5" font-weight="bold" fill="white">DISC</text>
+        </svg>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label">Card number</label>
+        <div id="ccnumber"></div>
+      </div>
+
+      <div class="field-row">
+        <div class="field-group">
+          <label class="field-label">Expiry date</label>
+          <div id="ccexp"></div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Security code</label>
+          <div id="cvv"></div>
+        </div>
+      </div>
+
+      <!-- Error / info messages -->
+      <div class="message error" id="msg-error">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="flex-shrink:0;margin-top:1px">
+          <circle cx="8" cy="8" r="7.5" stroke="currentColor"/>
+          <path d="M8 4.5V8.5M8 11h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span id="msg-error-text">An error occurred. Please try again.</span>
+      </div>
+
+      <!-- Submit -->
+      <button class="pay-btn" id="pay-btn" type="button" onclick="submitPayment()">
+        <span class="btn-text" id="btn-text">Pay $0.00</span>
+        <div class="spinner"></div>
+      </button>
+
+      <div class="form-footer">
+        <svg width="11" height="13" viewBox="0 0 11 13" fill="none">
+          <path d="M5.5 0L0 2.16667V6.5C0 9.625 2.42 12.5583 5.5 13C8.58 12.5583 11 9.625 11 6.5V2.16667L5.5 0Z" fill="currentColor"/>
+        </svg>
+        Payments secured by NMI · Your card info is never stored
+      </div>
+    </div>
+
+    <!-- SUCCESS SCREEN (hidden until payment confirmed) -->
+    <div class="success-screen" id="success-section">
+      <div class="success-icon">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <path d="M6 16L12 22L26 8" stroke="#2d7a4f" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="success-title">Payment received</div>
+      <div class="success-msg">
+        Thank you! Your payment has been processed successfully.<br>
+        You'll receive a confirmation shortly.
+      </div>
+      <div class="success-amount">
+        Amount paid: <strong id="success-amount-display">$0.00</strong>
+      </div>
+    </div>
+
+  </div><!-- .card -->
+</div><!-- .page-wrap -->
+
+<!--
+  ============================================================
+  NMI Collect.js — loaded with your public key
+  The data-tokenization-key is SAFE to expose in the browser.
+  It cannot be used to charge cards — only to tokenize.
+  ============================================================
+-->
+<script id="collectjs-script"
+  src="https://secure.networkmerchants.com/token/Collect.js"
+  data-tokenization-key=""
+  data-field-ccnumber-placeholder="1234 5678 9012 3456"
+  data-field-ccexp-placeholder="MM / YY"
+  data-field-cvv-placeholder="CVV"
+  data-google-font="DM+Sans"
+  data-custom-css='{
+    "font-size":"14px",
+    "font-family":"DM Sans, sans-serif",
+    "color":"#1a1a2e",
+    "background":"transparent",
+    "border":"none",
+    "height":"44px",
+    "line-height":"44px"
+  }'
+  data-invalid-css='{"color":"#c0392b"}'
+  data-placeholder-css='{"color":"#b0a99a"}'
+></script>
+
+<script>
+// ============================================================
+// Init — parse URL params, apply config, load Collect.js key
+// ============================================================
+(function init() {
+  const cfg = window.CONFIG;
+  const params = new URLSearchParams(window.location.search);
+
+  // Apply config to UI
+  document.querySelector('.practice-name').textContent = cfg.PRACTICE_NAME;
+  document.title = cfg.PRACTICE_NAME + ' — Secure Payment';
+
+  const logoEl = document.getElementById('practice-logo');
+  if (cfg.PRACTICE_LOGO) {
+    logoEl.src = cfg.PRACTICE_LOGO;
+    logoEl.classList.remove('hidden');
+  }
+
+  // Inject NMI public key into Collect.js script tag
+  document.getElementById('collectjs-script')
+    .setAttribute('data-tokenization-key', cfg.NMI_PUBLIC_KEY);
+
+  // Parse amount
+  const rawAmount = parseFloat(params.get('m') || params.get('amount') || '0');
+  window._amount = isNaN(rawAmount) ? 0 : rawAmount;
+  const formatted = window._amount.toFixed(2);
+  const [dollars, cents] = formatted.split('.');
+  document.getElementById('dollars').textContent = dollars;
+  document.getElementById('cents').textContent = '.' + cents;
+  document.getElementById('btn-text').textContent = 'Pay $' + formatted;
+  document.getElementById('success-amount-display').textContent = '$' + formatted;
+
+  // Parse patient info
+  window._name  = params.get('name')  || '';
+  window._email = params.get('email') || '';
+  window._phone = params.get('phone') || '';
+
+  const greeting = document.getElementById('patient-greeting');
+  if (window._name) {
+    greeting.innerHTML = 'Hello, <strong>' + escHtml(window._name) + '</strong>';
+  }
+
+  // Apply brand color overrides from config
+  if (cfg.PRIMARY_COLOR) {
+    document.documentElement.style.setProperty('--brand', cfg.PRIMARY_COLOR);
+  }
+})();
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ============================================================
+// Collect.js callback — called when token is ready
+// ============================================================
+var CollectJSResponseHandler = function(response) {
+  // response.token is the payment token to send to your backend
+  if (response.validationError) {
+    showError(response.validationError);
+    setLoading(false);
+    return;
+  }
+  sendToBackend(response.token);
+};
+
+// ============================================================
+// Submit handler
+// ============================================================
+function submitPayment() {
+  if (window._amount <= 0) {
+    showError('Invalid amount. Please contact the office.');
+    return;
+  }
+  setLoading(true);
+  hideError();
+
+  // Collect.js validates fields and calls CollectJSResponseHandler
+  CollectJS.startPaymentRequest();
+}
+
+// ============================================================
+// Backend call — sends token + metadata to your server function
+// ============================================================
+function sendToBackend(token) {
+  const payload = {
+    token:      token,
+    amount:     window._amount.toFixed(2),
+    name:       window._name,
+    email:      window._email,
+    phone:      window._phone,
+    ghl_webhook: window.CONFIG.GHL_WEBHOOK_URL
+  };
+
+  fetch(window.CONFIG.BACKEND_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  .then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  })
+  .then(function(data) {
+    if (data.success) {
+      showSuccess();
+    } else {
+      showError(data.error || 'Payment was declined. Please try a different card.');
+      setLoading(false);
+    }
+  })
+  .catch(function(err) {
+    console.error(err);
+    showError('A network error occurred. Please check your connection and try again.');
+    setLoading(false);
+  });
+}
+
+// ============================================================
+// UI helpers
+// ============================================================
+function setLoading(on) {
+  const btn = document.getElementById('pay-btn');
+  btn.classList.toggle('loading', on);
+  btn.disabled = on;
+}
+
+function showError(msg) {
+  const el = document.getElementById('msg-error');
+  document.getElementById('msg-error-text').textContent = msg;
+  el.classList.add('show');
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function hideError() {
+  document.getElementById('msg-error').classList.remove('show');
+}
+
+function showSuccess() {
+  document.getElementById('form-section').style.display = 'none';
+  document.getElementById('success-section').classList.add('show');
+}
+</script>
+</body>
+</html>
